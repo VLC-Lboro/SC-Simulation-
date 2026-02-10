@@ -6,6 +6,10 @@ Baseline supply chain simulation scaffolding for a three-stage automotive model.
 
 ```bash
 python -m sc_simulation.baseline
+or to run fully:
+python -m pip install --upgrade pip
+python -m pip install matplotlib
+python gui_application.py
 ```
 
 ## Programmatic usage
