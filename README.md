@@ -2,25 +2,15 @@
 
 Baseline supply chain simulation scaffolding for a three-stage automotive model.
 
-## Quick setup
-
-```bash
-python -m pip install -r requirements.txt
-```
-
 ## Run the baseline simulation
 
 ```bash
 python -m sc_simulation.baseline
-```
-
-## Run the baseline GUI
-
-```bash
+or to run fully:
+python -m pip install --upgrade pip
+python -m pip install matplotlib
 python gui_application.py
 ```
-
-> If `matplotlib` is missing, the GUI still opens but chart tabs are disabled.
 
 ## Programmatic usage
 
@@ -35,10 +25,5 @@ print(results.mean_lead_time)
 ## Tests
 
 ```bash
-python -m unittest discover -s tests
+python -m unittest
 ```
-
-## Architecture roadmap
-
-This repository is being prepared for scenario-by-scenario development and later merge into a single comparison GUI.
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the planned module layout.

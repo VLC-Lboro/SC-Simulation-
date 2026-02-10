@@ -1,22 +1,14 @@
 """
-Supply Chain Simulation GUI Application.
+Supply Chain Simulation GUI Application
 Baseline-only interface for running and inspecting results.
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 
-try:
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    from matplotlib.figure import Figure
-except ModuleNotFoundError as exc:  # pragma: no cover - GUI dependency guard
-    FigureCanvasTkAgg = None
-    Figure = None
-    MATPLOTLIB_IMPORT_ERROR = exc
-else:
-    MATPLOTLIB_IMPORT_ERROR = None
-
-from sc_simulation.baseline import BaselineParams, simulate_baseline
+from supply_chain_simulation import SimulationConfig, run_baseline
 
 
 class SupplyChainGUI:
@@ -27,7 +19,7 @@ class SupplyChainGUI:
         self.root.title("Baseline Supply Chain Simulation")
         self.root.geometry("1200x800")
 
-        self.config = BaselineParams()
+        self.config = SimulationConfig()
         self.results = None
 
         self._create_widgets()
@@ -54,7 +46,7 @@ class SupplyChainGUI:
         ).grid(row=0, column=0, columnspan=2, pady=(0, 10))
 
         ttk.Label(control_frame, text="Simulation Days:").grid(row=1, column=0, sticky=tk.W)
-        self.days_var = tk.IntVar(value=self.config.days)
+        self.days_var = tk.IntVar(value=self.config.num_periods)
         ttk.Entry(control_frame, textvariable=self.days_var, width=10).grid(
             row=1, column=1, sticky=tk.W
         )
@@ -128,17 +120,17 @@ class SupplyChainGUI:
         self.root.update()
 
         try:
-            self.config = BaselineParams(
-                days=self.days_var.get(),
+            self.config = SimulationConfig(
+                num_periods=self.days_var.get(),
                 avg_daily_demand=self.demand_var.get(),
                 t1_rop_days=self.rop_var.get(),
                 t1_order_up_to_days=self.order_up_to_var.get(),
             )
-            self.results = simulate_baseline(self.config)
+            self.results = run_baseline(self.config)
             self._update_results_display()
             self._update_visualizations()
             self.progress_label.config(text="Simulation complete!")
-        except Exception as exc:  # pragma: no cover - GUI pathway
+        except Exception as exc:
             messagebox.showerror("Error", f"Simulation failed: {exc}")
             self.progress_label.config(text="Simulation failed!")
 
@@ -161,10 +153,10 @@ class SupplyChainGUI:
         metrics = [
             ("Mean Lead Time (days)", f"{self.results.mean_lead_time:.2f}"),
             ("Lead Time Std Dev", f"{self.results.lead_time_std:.2f}"),
-            ("Worst Case Lead Time", f"{self.results.max_lead_time:.2f}"),
-            ("Mean WIP", f"{self.results.avg_wip:.2f}"),
-            ("Mean Backlog", f"{self.results.avg_backlog:.2f}"),
-            ("OTIF %", f"{self.results.otif * 100:.2f}%"),
+            ("Worst Case Lead Time", f"{self.results.worst_case_lead_time:.2f}"),
+            ("Mean WIP", f"{self.results.mean_wip:.2f}"),
+            ("Mean Backlog", f"{self.results.mean_backlog:.2f}"),
+            ("OTIF %", f"{self.results.otif_percentage:.2f}%"),
         ]
         for metric, value in metrics:
             self.results_tree.insert("", tk.END, values=(metric, value))
@@ -177,14 +169,6 @@ class SupplyChainGUI:
         if not self.results:
             return
 
-        if Figure is None or FigureCanvasTkAgg is None:
-            ttk.Label(
-                self.lead_time_frame,
-                text="Install matplotlib to enable charts: pip install matplotlib",
-                foreground="red",
-            ).pack(padx=10, pady=10)
-            return
-
         fig = Figure(figsize=(10, 4))
         ax1 = fig.add_subplot(121)
         ax1.hist(self.results.lead_times, bins=25, color="#1f77b4", alpha=0.7)
@@ -193,10 +177,11 @@ class SupplyChainGUI:
         ax1.set_ylabel("Frequency")
 
         ax2 = fig.add_subplot(122)
-        ax2.plot(self.results.lead_times, label="Lead Time", color="#2ca02c")
-        ax2.set_title("Lead Times Over Shipments")
-        ax2.set_xlabel("Shipment index")
-        ax2.set_ylabel("Days")
+        ax2.plot(self.results.wip_levels, label="WIP", color="#2ca02c")
+        ax2.plot(self.results.backlog_levels, label="Backlog", color="#d62728")
+        ax2.set_title("WIP and Backlog")
+        ax2.set_xlabel("Day")
+        ax2.set_ylabel("Units")
         ax2.legend()
 
         fig.tight_layout()
@@ -204,12 +189,21 @@ class SupplyChainGUI:
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
+        fig2 = Figure(figsize=(10, 4))
+        ax3 = fig2.add_subplot(111)
+        ax3.plot(self.results.wip_levels, label="WIP", color="#2ca02c")
+        ax3.plot(self.results.backlog_levels, label="Backlog", color="#d62728")
+        ax3.set_title("WIP and Backlog (Detailed)")
+        ax3.set_xlabel("Day")
+        ax3.set_ylabel("Units")
+        ax3.legend()
+        fig2.tight_layout()
+        canvas2 = FigureCanvasTkAgg(fig2, master=self.wip_frame)
+        canvas2.draw()
+        canvas2.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
 
 def main() -> None:
-    if MATPLOTLIB_IMPORT_ERROR is not None:
-        print(
-            "Warning: matplotlib not installed. GUI metrics table will work, charts are disabled."
-        )
     root = tk.Tk()
     app = SupplyChainGUI(root)
     root.mainloop()
