@@ -1,26 +1,54 @@
 # SC-Simulation-
 
-Baseline supply chain simulation scaffolding for a three-stage automotive model.
+Supply chain simulation scaffolding for a three-stage automotive model.
 
 ## Run the baseline simulation
 
 ```bash
 python -m sc_simulation.baseline
-or to run fully:
-python -m pip install --upgrade pip
-python -m pip install matplotlib
-python gui_application.py
 ```
+
+## Run forecast sharing scenario comparison GUI
+
+```bash
+python gui_forecast_sharing.py
+```
+
+The forecast-sharing GUI presents baseline KPIs and forecast-sharing KPIs side-by-side (mean lead time, lead-time std, worst lead time, mean WIP, mean backlog, OTIF, fill rate, bullwhip, average inventory) and includes plots for lead-time distributions, WIP/backlog traces, and OTIF/fill/bullwhip comparisons.
 
 ## Programmatic usage
 
 ```python
-from sc_simulation.baseline import BaselineParams, simulate_baseline
+from supply_chain_simulation import (
+    SimulationConfig,
+    ForecastSharingConfig,
+    run_baseline,
+    run_forecast_sharing,
+    compare_scenarios,
+)
 
-params = BaselineParams(days=120, seed=7)
-results = simulate_baseline(params)
-print(results.mean_lead_time)
+config = SimulationConfig(
+    num_periods=120,
+    forecast_sharing=ForecastSharingConfig(
+        forecast_horizon=7,
+        forecast_update_frequency=2,
+        forecast_accuracy_model="noise",
+        forecast_error_std=8.0,
+        t1_forecast_weight=0.4,
+    ),
+)
+
+baseline_results = run_baseline(config)
+forecast_results = run_forecast_sharing(config)
+comparison = compare_scenarios(config)
+print(comparison.baseline.fill_rate, comparison.forecast_sharing.fill_rate)
 ```
+
+## Scenario config metadata
+
+Default metadata for baseline and forecast-sharing parameters is stored in:
+
+- `scenario_config.json`
 
 ## Tests
 
