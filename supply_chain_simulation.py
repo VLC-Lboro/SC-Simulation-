@@ -64,6 +64,13 @@ class SimulationResults:
     lead_times: List[float]
     wip_levels: List[float]
     backlog_levels: List[float]
+    inventory_levels: List[float]
+
+
+@dataclass
+class ScenarioComparison:
+    baseline: SimulationResults
+    forecast_sharing: SimulationResults
 
 
 @dataclass
@@ -127,6 +134,8 @@ class SupplyChainSimulation:
     def reset(self) -> None:
         self.current_period = 0
         self.rng = random.Random(self.config.seed)
+        self.forecast_rng = random.Random(self.config.seed + 2024)
+        self.demand_rng = random.Random(self.config.seed + 1001)
 
         self.t1_inventory = self.config.t1_initial_inventory
         self.oem_inventory = self.config.oem_initial_inventory
@@ -196,8 +205,12 @@ class SupplyChainSimulation:
         if self.use_forecast:
             self.active_forecast = self.forecast_module.maybe_update(self.current_period)
 
-    def _place_oem_order(self) -> None:
-        if self.current_period % self.config.oem_order_cycle_days != 0:
+        fulfilled = min(demand, self.oem_inventory)
+        self.oem_inventory -= fulfilled
+        self.total_customer_fulfilled += fulfilled
+
+    def _update_forecast(self) -> None:
+        if not self.use_forecast:
             return
 
         order_size = _poisson(
@@ -240,6 +253,7 @@ class SupplyChainSimulation:
 
     def _place_t1_order(self) -> None:
         if self.current_period % self.config.t1_review_period_days != 0:
+            self.t1_order_history.append(0)
             return
 
         t1_backlog_qty = sum(order["remaining"] for order in self.oem_orders)
@@ -312,7 +326,23 @@ class SupplyChainSimulation:
         mean_backlog = (
             sum(self.backlog_levels) / len(self.backlog_levels) if self.backlog_levels else 0.0
         )
-        otif = (self.on_time_shipments / self.total_shipments * 100) if self.total_shipments else 0.0
+        otif = (
+            self.on_time_shipments / self.total_shipments * 100 if self.total_shipments else 0.0
+        )
+
+        fill_rate = (
+            self.total_customer_fulfilled / self.total_customer_demand
+            if self.total_customer_demand
+            else 0.0
+        )
+
+        oem_order_std = pstdev(self.oem_order_history) if len(self.oem_order_history) > 1 else 0.0
+        t1_order_std = pstdev(self.t1_order_history) if len(self.t1_order_history) > 1 else 0.0
+        bullwhip = t1_order_std / oem_order_std if oem_order_std > 0 else 0.0
+
+        average_inventory = (
+            sum(self.inventory_levels) / len(self.inventory_levels) if self.inventory_levels else 0.0
+        )
 
         fill_rate = (
             self.total_customer_fulfilled / self.total_customer_demand
@@ -342,6 +372,7 @@ class SupplyChainSimulation:
             lead_times=self.lead_times,
             wip_levels=self.wip_levels,
             backlog_levels=self.backlog_levels,
+            inventory_levels=self.inventory_levels,
         )
 
 
