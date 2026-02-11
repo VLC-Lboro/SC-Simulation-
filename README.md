@@ -14,6 +14,12 @@ python -m sc_simulation.baseline
 python gui_forecast_sharing.py
 ```
 
+## Run forecast sharing scenario comparison GUI
+
+```bash
+python gui_forecast_sharing.py
+```
+
 The forecast-sharing GUI presents baseline KPIs and forecast-sharing KPIs side-by-side (mean lead time, lead-time std, worst lead time, mean WIP, mean backlog, OTIF, fill rate, bullwhip, average inventory) and includes plots for lead-time distributions, WIP/backlog traces, and OTIF/fill/bullwhip comparisons.
 
 ## Programmatic usage
