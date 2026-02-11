@@ -5,7 +5,7 @@ from supply_chain_simulation import SimulationConfig, SupplyChainSimulation, run
 
 class CompatibilityTests(unittest.TestCase):
     def test_legacy_entrypoints_still_work(self):
-        config = SimulationConfig(days=15, seed=1)
+        config = SimulationConfig(num_periods=15, seed=1)
         results_direct = run_baseline(config)
         sim = SupplyChainSimulation(config)
         results_class = sim.run_simulation()
