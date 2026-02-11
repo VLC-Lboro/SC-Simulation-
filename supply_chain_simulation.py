@@ -73,6 +73,12 @@ class ScenarioComparison:
     forecast_sharing: SimulationResults
 
 
+@dataclass
+class ScenarioComparison:
+    baseline: SimulationResults
+    forecast_sharing: SimulationResults
+
+
 def _poisson(rng: random.Random, lam: float) -> int:
     if lam <= 0:
         return 0
@@ -86,34 +92,33 @@ def _poisson(rng: random.Random, lam: float) -> int:
 
 
 class ForecastModule:
-    """Generates OEM demand forecasts with perfect or noisy modes."""
+    """Generates OEM demand forecasts with optional noise."""
 
     def __init__(
         self,
         config: ForecastSharingConfig,
-        demand_plan: List[int],
+        avg_daily_demand: int,
         rng: random.Random,
     ) -> None:
         self.config = config
-        self.demand_plan = demand_plan
+        self.avg_daily_demand = avg_daily_demand
         self.rng = rng
-        self.current_forecast: List[float] = [0.0] * config.forecast_horizon
+        self.current_forecast: List[float] = [float(avg_daily_demand)] * config.forecast_horizon
 
     def maybe_update(self, day: int) -> List[float]:
         if day % self.config.forecast_update_frequency == 0:
-            self.current_forecast = self._generate_forecast(day)
+            self.current_forecast = self._generate_forecast()
         return self.current_forecast
 
-    def _generate_forecast(self, day: int) -> List[float]:
+    def _generate_forecast(self) -> List[float]:
         forecast: List[float] = []
-        for step in range(self.config.forecast_horizon):
-            future_day = min(day + step, len(self.demand_plan) - 1)
-            true_demand = float(self.demand_plan[future_day])
+        for _ in range(self.config.forecast_horizon):
+            base_value = float(self.avg_daily_demand)
             if self.config.forecast_accuracy_model == "perfect":
-                forecast.append(true_demand)
+                forecast.append(base_value)
                 continue
-            noisy_value = true_demand + self.rng.gauss(0.0, self.config.forecast_error_std)
-            forecast.append(max(0.0, noisy_value))
+            noisy = base_value + self.rng.gauss(0.0, self.config.forecast_error_std)
+            forecast.append(max(0.0, noisy))
         return forecast
 
 
@@ -156,19 +161,12 @@ class SupplyChainSimulation:
         self.t1_rop = int(self.config.t1_rop_days * self.config.avg_daily_demand)
         self.t1_order_up_to = int(self.config.t1_order_up_to_days * self.config.avg_daily_demand)
 
-        self.demand_plan = [
-            _poisson(self.demand_rng, self.config.avg_daily_demand)
-            for _ in range(self.config.num_periods)
-        ]
-
         self.forecast_module = ForecastModule(
             self.config.forecast_sharing,
-            self.demand_plan,
-            self.forecast_rng,
+            self.config.avg_daily_demand,
+            self.rng,
         )
-        self.active_forecast: List[float] = [float(self.config.avg_daily_demand)] * max(
-            1, self.config.forecast_sharing.forecast_horizon
-        )
+        self.active_forecast: List[float] = []
 
     def run_simulation(self) -> SimulationResults:
         for day in range(self.config.num_periods):
@@ -196,8 +194,16 @@ class SupplyChainSimulation:
             self.t1_inventory += shipment["qty"]
 
     def _process_oem_demand(self) -> None:
-        demand = self.demand_plan[self.current_period]
+        demand = _poisson(self.rng, self.config.avg_daily_demand)
         self.total_customer_demand += demand
+
+        fulfilled = min(demand, self.oem_inventory)
+        self.oem_inventory -= fulfilled
+        self.total_customer_fulfilled += fulfilled
+
+    def _update_forecast(self) -> None:
+        if self.use_forecast:
+            self.active_forecast = self.forecast_module.maybe_update(self.current_period)
 
         fulfilled = min(demand, self.oem_inventory)
         self.oem_inventory -= fulfilled
@@ -206,20 +212,14 @@ class SupplyChainSimulation:
     def _update_forecast(self) -> None:
         if not self.use_forecast:
             return
-        self.active_forecast = self.forecast_module.maybe_update(self.current_period)
 
-    def _place_oem_order(self) -> None:
-        order_size = 0
-        if self.current_period % self.config.oem_order_cycle_days == 0:
-            order_size = _poisson(
-                self.rng,
-                self.config.avg_daily_demand * self.config.oem_order_cycle_days,
-            )
-            if order_size > 0:
-                self.oem_orders.append(
-                    {"order_day": self.current_period, "remaining": order_size}
-                )
+        order_size = _poisson(
+            self.rng,
+            self.config.avg_daily_demand * self.config.oem_order_cycle_days,
+        )
         self.oem_order_history.append(order_size)
+        if order_size > 0:
+            self.oem_orders.append({"order_day": self.current_period, "remaining": order_size})
 
     def _fulfill_oem_orders(self) -> None:
         for order in self.oem_orders:
@@ -261,39 +261,19 @@ class SupplyChainSimulation:
         inventory_position = self.t1_inventory + t2_pipeline - t1_backlog_qty
 
         target_order_up_to = self.t1_order_up_to
-        dynamic_rop = self.t1_rop
-        if self.use_forecast:
-            coverage_days = max(1, int(round(self.config.t1_order_up_to_days)))
-            history_window = self.oem_order_history[-coverage_days:]
-            observed_cycle = sum(history_window) if history_window else 0.0
-
-            forecast_cycle = sum(self.active_forecast[:coverage_days])
-            weight = min(1.0, max(0.0, self.config.forecast_sharing.t1_forecast_weight))
-            blended_cycle = (1 - weight) * observed_cycle + weight * forecast_cycle
-
-            adjusted_daily = blended_cycle / coverage_days
-            target_order_up_to = int(round(adjusted_daily * self.config.t1_order_up_to_days))
-
-            lead_cover_days = max(
-                1,
-                int(
-                    math.ceil(
-                        self.config.t2_to_t1_lead_time_base
-                        + self.config.t2_to_t1_lead_time_exp_mean
-                    )
-                ),
+        if self.use_forecast and self.active_forecast:
+            cycle_days = max(1, self.config.oem_order_cycle_days)
+            forecast_window = self.active_forecast[:cycle_days]
+            expected_cycle_demand = sum(forecast_window)
+            blended_cycle_demand = (
+                (1 - self.config.forecast_sharing.t1_forecast_weight)
+                * (self.config.avg_daily_demand * cycle_days)
+                + self.config.forecast_sharing.t1_forecast_weight * expected_cycle_demand
             )
-            forecast_lead = sum(self.active_forecast[:lead_cover_days])
-            observed_lead = sum(self.oem_order_history[-lead_cover_days:])
-            blended_lead = (1 - weight) * observed_lead + weight * forecast_lead
-            dynamic_rop = int(round((1 - weight) * self.t1_rop + weight * blended_lead))
+            target_order_up_to += int(round(max(0.0, blended_cycle_demand)))
 
         order_qty = 0
-        if self.use_forecast:
-            desired_position = max(dynamic_rop, target_order_up_to)
-            order_qty = max(0, desired_position - inventory_position)
-            self.t2_backlog += order_qty
-        elif inventory_position <= dynamic_rop:
+        if inventory_position <= self.t1_rop:
             order_qty = max(0, target_order_up_to - inventory_position)
             self.t2_backlog += order_qty
 
@@ -359,6 +339,20 @@ class SupplyChainSimulation:
         oem_order_std = pstdev(self.oem_order_history) if len(self.oem_order_history) > 1 else 0.0
         t1_order_std = pstdev(self.t1_order_history) if len(self.t1_order_history) > 1 else 0.0
         bullwhip = t1_order_std / oem_order_std if oem_order_std > 0 else 0.0
+
+        average_inventory = (
+            sum(self.inventory_levels) / len(self.inventory_levels) if self.inventory_levels else 0.0
+        )
+
+        fill_rate = (
+            self.total_customer_fulfilled / self.total_customer_demand
+            if self.total_customer_demand
+            else 0.0
+        )
+
+        oem_order_std = pstdev(self.oem_order_history) if len(self.oem_order_history) > 1 else 0.0
+        t1_order_std = pstdev(self.t1_order_history) if len(self.t1_order_history) > 1 else 0.0
+        bullwhip = (t1_order_std / oem_order_std) if oem_order_std > 0 else 0.0
 
         average_inventory = (
             sum(self.inventory_levels) / len(self.inventory_levels) if self.inventory_levels else 0.0
