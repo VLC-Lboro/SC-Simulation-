@@ -1,0 +1,28 @@
+{
+  "baseline": {
+    "num_periods": 120,
+    "seed": 7,
+    "avg_daily_demand": 100,
+    "oem_order_cycle_days": 2,
+    "t1_initial_inventory": 500,
+    "oem_initial_inventory": 500,
+    "t1_rop_days": 1.8,
+    "t1_order_up_to_days": 5.4,
+    "t1_review_period_days": 1,
+    "t2_daily_mean_capacity": 105,
+    "t2_daily_capacity_sd": 11,
+    "t2_downtime_probability": 0.05,
+    "t2_to_t1_lead_time_base": 2.0,
+    "t2_to_t1_lead_time_exp_mean": 0.5,
+    "t1_to_oem_lead_time_base": 1.0,
+    "t1_to_oem_lead_time_uniform_max": 0.5,
+    "otif_target_days": 2.0
+  },
+  "forecast_sharing": {
+    "forecast_horizon": 7,
+    "forecast_update_frequency": 2,
+    "forecast_accuracy_model": "noise",
+    "forecast_error_std": 8.0,
+    "t1_forecast_weight": 0.4
+  }
+}
