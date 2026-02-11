@@ -1,32 +1,25 @@
 # Repository Architecture Plan
 
-This project is being built scenario-by-scenario.
+This project is built scenario-by-scenario.
 
 ## Current implementation
-- Scenario 1 (Baseline): implemented in `sc_simulation/baseline.py`.
-- Legacy compatibility imports: `supply_chain_simulation.py` delegates to `sc_simulation.baseline`.
-- GUI: `gui_application.py` currently runs baseline only.
+- Scenario 1 (Baseline): implemented and available via `run_baseline`.
+- Scenario 2 (Forecast Sharing): implemented and available via `run_forecast_sharing`.
+- Scenario comparison utility: `compare_scenarios` returns baseline vs forecast-sharing metrics.
+- Baseline-only GUI: `gui_application.py`.
+- Forecast-sharing comparison GUI: `gui_forecast_sharing.py`.
 
-## Planned structure for scenarios
-Create one module per scenario with a consistent API:
+## Scenario modules
+- `sc_simulation/baseline.py`
+- `sc_simulation/forecast_sharing.py`
 
-- `sc_simulation/scenario_1_baseline.py`
-- `sc_simulation/scenario_2_forecast_sharing.py`
-- `sc_simulation/scenario_3_inventory_visibility.py`
-- `sc_simulation/scenario_4_capacity_visibility.py`
-- `sc_simulation/scenario_5_full_visibility.py`
-
-Each module should expose:
-- `Params` dataclass
-- `Results` dataclass
-- `simulate_<scenario>(params)` function
+## Forecast-sharing metrics tracked
+- Fill rate
+- Lead time (mean/std/worst)
+- Bullwhip effect (std of T1 orders / std of OEM orders)
+- Inventory level and WIP/backlog trends
 
 ## Testing strategy
-- Add one test file per scenario under `tests/`.
-- Keep deterministic seeds for reproducible comparisons.
-- Add regression tests before merging each scenario into a combined GUI.
-
-## Merge strategy
-1. Build and validate each scenario independently.
-2. Add a scenario selector in one unified GUI at the end.
-3. Keep per-scenario modules intact for reproducibility and debugging.
+- Unit tests for baseline scenario under `tests/test_baseline.py`
+- Compatibility tests for legacy entrypoints under `tests/test_compatibility.py`
+- Forecast module, T1 ordering logic, and comparison tests under `tests/test_forecast_sharing.py`
