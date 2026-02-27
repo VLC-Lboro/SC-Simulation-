@@ -4,14 +4,11 @@ from supply_chain_simulation import SimulationConfig, SupplyChainSimulation, run
 
 
 class CompatibilityTests(unittest.TestCase):
-    def test_legacy_entrypoints_still_work(self):
-        config = SimulationConfig(num_periods=15, seed=1)
-        results_direct = run_baseline(config)
-        sim = SupplyChainSimulation(config)
-        results_class = sim.run_simulation()
-
-        self.assertGreaterEqual(results_direct.mean_lead_time, 0)
-        self.assertEqual(results_direct.mean_lead_time, results_class.mean_lead_time)
+    def test_baseline_entrypoints(self):
+        cfg = SimulationConfig(simulation_horizon=25, random_seed=1)
+        direct = run_baseline(cfg)
+        via_class = SupplyChainSimulation(cfg, scenario_id=1).run_simulation()
+        self.assertAlmostEqual(direct.mean_lead_time, via_class.mean_lead_time)
 
 
 if __name__ == "__main__":

@@ -1,211 +1,165 @@
-"""
-Supply Chain Simulation GUI Application
-Baseline-only interface for running and inspecting results.
-"""
+"""Tkinter GUI for the 5-scenario supply-chain simulation."""
+
+from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox, ttk
+
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from supply_chain_simulation import SimulationConfig, run_baseline
+from supply_chain_simulation import SimulationConfig, run_all_scenarios
 
 
 class SupplyChainGUI:
-    """GUI application for the baseline supply chain simulation."""
-
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Baseline Supply Chain Simulation")
-        self.root.geometry("1200x800")
-
-        self.config = SimulationConfig()
+        self.root.title("3-Stage Supply Chain SCV Simulation")
+        self.root.geometry("1200x760")
         self.results = None
+        self._build_ui()
 
-        self._create_widgets()
+    def _build_ui(self) -> None:
+        main = ttk.Frame(self.root, padding=10)
+        main.pack(fill=tk.BOTH, expand=True)
 
-    def _create_widgets(self) -> None:
-        main_container = ttk.Frame(self.root, padding="10")
-        main_container.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_container.columnconfigure(1, weight=1)
-        main_container.rowconfigure(1, weight=1)
+        controls = ttk.LabelFrame(main, text="Parameters", padding=10)
+        controls.pack(side=tk.LEFT, fill=tk.Y)
 
-        self._create_control_panel(main_container)
-        self._create_results_panel(main_container)
+        self.horizon_var = tk.IntVar(value=180)
+        self.seed_var = tk.IntVar(value=7)
+        self.dist_var = tk.StringVar(value="poisson")
+        self.demand_var = tk.DoubleVar(value=100.0)
+        self.t1_cap_var = tk.IntVar(value=140)
+        self.t23_cap_var = tk.IntVar(value=130)
 
-    def _create_control_panel(self, parent: ttk.Frame) -> None:
-        control_frame = ttk.LabelFrame(parent, text="Baseline Parameters", padding="10")
-        control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
-
-        ttk.Label(
-            control_frame,
-            text="Baseline Scenario",
-            font=("Helvetica", 14, "bold"),
-        ).grid(row=0, column=0, columnspan=2, pady=(0, 10))
-
-        ttk.Label(control_frame, text="Simulation Days:").grid(row=1, column=0, sticky=tk.W)
-        self.days_var = tk.IntVar(value=self.config.num_periods)
-        ttk.Entry(control_frame, textvariable=self.days_var, width=10).grid(
-            row=1, column=1, sticky=tk.W
-        )
-
-        ttk.Label(control_frame, text="Avg Daily Demand:").grid(
-            row=2, column=0, sticky=tk.W, pady=5
-        )
-        self.demand_var = tk.IntVar(value=self.config.avg_daily_demand)
-        ttk.Entry(control_frame, textvariable=self.demand_var, width=10).grid(
-            row=2, column=1, sticky=tk.W, pady=5
-        )
-
-        ttk.Label(control_frame, text="T1 ROP (days):").grid(row=3, column=0, sticky=tk.W)
-        self.rop_var = tk.DoubleVar(value=self.config.t1_rop_days)
-        ttk.Entry(control_frame, textvariable=self.rop_var, width=10).grid(
-            row=3, column=1, sticky=tk.W
-        )
-
-        ttk.Label(control_frame, text="T1 Order-up-to (days):").grid(
-            row=4, column=0, sticky=tk.W, pady=5
-        )
-        self.order_up_to_var = tk.DoubleVar(value=self.config.t1_order_up_to_days)
-        ttk.Entry(control_frame, textvariable=self.order_up_to_var, width=10).grid(
-            row=4, column=1, sticky=tk.W, pady=5
-        )
-
-        button_frame = ttk.Frame(control_frame)
-        button_frame.grid(row=5, column=0, columnspan=2, pady=10)
-        ttk.Button(button_frame, text="Run Baseline", command=self._run_baseline).grid(
-            row=0, column=0, padx=5
-        )
-        ttk.Button(button_frame, text="Clear Results", command=self._clear_results).grid(
-            row=0, column=1, padx=5
-        )
-
-        self.progress_label = ttk.Label(control_frame, text="", foreground="blue")
-        self.progress_label.grid(row=6, column=0, columnspan=2, pady=5)
-
-    def _create_results_panel(self, parent: ttk.Frame) -> None:
-        results_frame = ttk.Frame(parent)
-        results_frame.grid(row=0, column=1, sticky=(tk.W, tk.E, tk.N, tk.S))
-        results_frame.columnconfigure(0, weight=1)
-        results_frame.rowconfigure(1, weight=1)
-
-        table_frame = ttk.LabelFrame(results_frame, text="Baseline Results", padding="10")
-        table_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        table_frame.columnconfigure(0, weight=1)
-
-        columns = ("Metric", "Value")
-        self.results_tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=6)
-        self.results_tree.heading("Metric", text="Metric")
-        self.results_tree.heading("Value", text="Value")
-        self.results_tree.column("Metric", width=200)
-        self.results_tree.column("Value", width=150)
-        self.results_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-        viz_frame = ttk.LabelFrame(results_frame, text="Visualizations", padding="10")
-        viz_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        viz_frame.columnconfigure(0, weight=1)
-        viz_frame.rowconfigure(0, weight=1)
-
-        self.viz_notebook = ttk.Notebook(viz_frame)
-        self.viz_notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.lead_time_frame = ttk.Frame(self.viz_notebook)
-        self.wip_frame = ttk.Frame(self.viz_notebook)
-        self.viz_notebook.add(self.lead_time_frame, text="Lead Times")
-        self.viz_notebook.add(self.wip_frame, text="WIP & Backlog")
-
-    def _run_baseline(self) -> None:
-        self.progress_label.config(text="Running baseline simulation...")
-        self.root.update()
-
-        try:
-            self.config = SimulationConfig(
-                num_periods=self.days_var.get(),
-                avg_daily_demand=self.demand_var.get(),
-                t1_rop_days=self.rop_var.get(),
-                t1_order_up_to_days=self.order_up_to_var.get(),
-            )
-            self.results = run_baseline(self.config)
-            self._update_results_display()
-            self._update_visualizations()
-            self.progress_label.config(text="Simulation complete!")
-        except Exception as exc:
-            messagebox.showerror("Error", f"Simulation failed: {exc}")
-            self.progress_label.config(text="Simulation failed!")
-
-    def _clear_results(self) -> None:
-        self.results = None
-        for item in self.results_tree.get_children():
-            self.results_tree.delete(item)
-        for frame in [self.lead_time_frame, self.wip_frame]:
-            for widget in frame.winfo_children():
-                widget.destroy()
-        self.progress_label.config(text="Results cleared")
-
-    def _update_results_display(self) -> None:
-        for item in self.results_tree.get_children():
-            self.results_tree.delete(item)
-
-        if not self.results:
-            return
-
-        metrics = [
-            ("Mean Lead Time (days)", f"{self.results.mean_lead_time:.2f}"),
-            ("Lead Time Std Dev", f"{self.results.lead_time_std:.2f}"),
-            ("Worst Case Lead Time", f"{self.results.worst_case_lead_time:.2f}"),
-            ("Mean WIP", f"{self.results.mean_wip:.2f}"),
-            ("Mean Backlog", f"{self.results.mean_backlog:.2f}"),
-            ("OTIF %", f"{self.results.otif_percentage:.2f}%"),
+        rows = [
+            ("Horizon (days)", self.horizon_var),
+            ("Random seed", self.seed_var),
+            ("Expected daily demand", self.demand_var),
+            ("T1 capacity/day", self.t1_cap_var),
+            ("T23 capacity/day", self.t23_cap_var),
         ]
-        for metric, value in metrics:
-            self.results_tree.insert("", tk.END, values=(metric, value))
+        for idx, (label, var) in enumerate(rows):
+            ttk.Label(controls, text=label).grid(row=idx, column=0, sticky=tk.W, pady=4)
+            ttk.Entry(controls, textvariable=var, width=12).grid(row=idx, column=1, sticky=tk.W, pady=4)
 
-    def _update_visualizations(self) -> None:
-        for frame in [self.lead_time_frame, self.wip_frame]:
-            for widget in frame.winfo_children():
-                widget.destroy()
+        ttk.Label(controls, text="Demand dist").grid(row=5, column=0, sticky=tk.W, pady=4)
+        ttk.Combobox(controls, textvariable=self.dist_var, values=["poisson", "normal", "deterministic"], width=10, state="readonly").grid(row=5, column=1, sticky=tk.W, pady=4)
 
-        if not self.results:
-            return
+        ttk.Button(controls, text="Run all 5 scenarios", command=self._run).grid(row=6, column=0, columnspan=2, pady=10)
+        self.status = ttk.Label(controls, text="")
+        self.status.grid(row=7, column=0, columnspan=2, sticky=tk.W)
 
-        fig = Figure(figsize=(10, 4))
-        ax1 = fig.add_subplot(121)
-        ax1.hist(self.results.lead_times, bins=25, color="#1f77b4", alpha=0.7)
-        ax1.set_title("Lead Time Distribution")
-        ax1.set_xlabel("Days")
-        ax1.set_ylabel("Frequency")
+        right = ttk.Frame(main)
+        right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        ax2 = fig.add_subplot(122)
-        ax2.plot(self.results.wip_levels, label="WIP", color="#2ca02c")
-        ax2.plot(self.results.backlog_levels, label="Backlog", color="#d62728")
-        ax2.set_title("WIP and Backlog")
-        ax2.set_xlabel("Day")
-        ax2.set_ylabel("Units")
+        self.tree = ttk.Treeview(right, columns=("scenario", "mean_lt", "p95_lt", "std_lt", "mean_backlog", "bullwhip"), show="headings", height=8)
+        for key, title, width in [
+            ("scenario", "Scenario", 200),
+            ("mean_lt", "Mean LT", 80),
+            ("p95_lt", "P95 LT", 80),
+            ("std_lt", "LT Std", 80),
+            ("mean_backlog", "Mean Backlog", 110),
+            ("bullwhip", "Bullwhip", 90),
+        ]:
+            self.tree.heading(key, text=title)
+            self.tree.column(key, width=width)
+        self.tree.pack(fill=tk.X, pady=(0, 8))
+
+        self.notebook = ttk.Notebook(right)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        self.fig_frame = ttk.Frame(self.notebook)
+        self.flow_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.fig_frame, text="Lead Time + Backlog")
+        self.notebook.add(self.flow_frame, text="Orders + Demand")
+
+    def _run(self) -> None:
+        try:
+            demand_type = self.dist_var.get()
+            demand_params = {
+                "poisson": {"lambda": self.demand_var.get()},
+                "normal": {"mean": self.demand_var.get(), "std_dev": 20.0},
+                "deterministic": {"value": self.demand_var.get()},
+            }[demand_type]
+
+            config = SimulationConfig(
+                simulation_horizon=self.horizon_var.get(),
+                random_seed=self.seed_var.get(),
+                demand_distribution_type=demand_type,
+                demand_params=demand_params,
+                t1_daily_capacity=self.t1_cap_var.get(),
+                t23_daily_capacity=self.t23_cap_var.get(),
+            )
+
+            self.status.config(text="Running...")
+            self.root.update_idletasks()
+            self.results = run_all_scenarios(config)
+            self._populate_table()
+            self._plot()
+            self.status.config(text="Done")
+        except Exception as exc:
+            messagebox.showerror("Simulation error", str(exc))
+            self.status.config(text="Failed")
+
+    def _populate_table(self) -> None:
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+        for scenario_id in [1, 2, 3, 4, 5]:
+            r = self.results[scenario_id]
+            self.tree.insert(
+                "",
+                tk.END,
+                values=(
+                    r.scenario_name,
+                    f"{r.mean_lead_time:.2f}",
+                    f"{r.worst_case_lead_time_p95:.2f}",
+                    f"{r.lead_time_std:.2f}",
+                    f"{r.mean_backlog_t1:.2f}",
+                    "NaN" if str(r.bullwhip_ratio) == "nan" else f"{r.bullwhip_ratio:.2f}",
+                ),
+            )
+
+    def _plot(self) -> None:
+        for frame in [self.fig_frame, self.flow_frame]:
+            for child in frame.winfo_children():
+                child.destroy()
+
+        baseline = self.results[1]
+        full = self.results[5]
+
+        fig1 = Figure(figsize=(9, 4))
+        ax1 = fig1.add_subplot(121)
+        ax1.hist(baseline.lead_times, bins=20, alpha=0.6, label="Baseline")
+        ax1.hist(full.lead_times, bins=20, alpha=0.6, label="Full vis")
+        ax1.set_title("Lead-time distribution")
+        ax1.legend()
+
+        ax2 = fig1.add_subplot(122)
+        ax2.plot(baseline.t1_backlog_units, label="Baseline")
+        ax2.plot(full.t1_backlog_units, label="Full vis")
+        ax2.set_title("T1 backlog trend")
         ax2.legend()
+        fig1.tight_layout()
+        c1 = FigureCanvasTkAgg(fig1, self.fig_frame)
+        c1.draw()
+        c1.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        fig.tight_layout()
-        canvas = FigureCanvasTkAgg(fig, master=self.lead_time_frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-        fig2 = Figure(figsize=(10, 4))
+        fig2 = Figure(figsize=(9, 4))
         ax3 = fig2.add_subplot(111)
-        ax3.plot(self.results.wip_levels, label="WIP", color="#2ca02c")
-        ax3.plot(self.results.backlog_levels, label="Backlog", color="#d62728")
-        ax3.set_title("WIP and Backlog (Detailed)")
-        ax3.set_xlabel("Day")
-        ax3.set_ylabel("Units")
+        ax3.plot(baseline.daily_oem_demand, label="OEM demand", alpha=0.8)
+        ax3.plot(baseline.t1_to_t23_orders, label="T1->T23 orders", alpha=0.8)
+        ax3.set_title("Baseline demand vs upstream orders")
         ax3.legend()
         fig2.tight_layout()
-        canvas2 = FigureCanvasTkAgg(fig2, master=self.wip_frame)
-        canvas2.draw()
-        canvas2.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        c2 = FigureCanvasTkAgg(fig2, self.flow_frame)
+        c2.draw()
+        c2.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
 
 def main() -> None:
     root = tk.Tk()
-    app = SupplyChainGUI(root)
+    SupplyChainGUI(root)
     root.mainloop()
 
 

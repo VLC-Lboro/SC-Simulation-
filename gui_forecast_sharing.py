@@ -1,140 +1,67 @@
-"""Forecast sharing GUI for side-by-side scenario comparison."""
+"""Simple GUI for baseline vs forecast-sharing (Scenario 2)."""
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox, ttk
 
-from supply_chain_simulation import (
-    ForecastSharingConfig,
-    SimulationConfig,
-    compare_scenarios,
-)
+from supply_chain_simulation import SimulationConfig, compare_scenarios
 
 
 class ForecastSharingGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Forecast Sharing Supply Chain Simulation")
-        self.root.geometry("900x600")
+        self.root.title("Baseline vs Forecast Sharing")
+        self.root.geometry("760x420")
+        self.days_var = tk.IntVar(value=180)
+        self.seed_var = tk.IntVar(value=7)
+        self.demand_var = tk.DoubleVar(value=100.0)
+        self._build()
 
-        self.config = SimulationConfig()
-        self._build_ui()
+    def _build(self) -> None:
+        frm = ttk.Frame(self.root, padding=10)
+        frm.pack(fill=tk.BOTH, expand=True)
 
-    def _build_ui(self) -> None:
-        frame = ttk.Frame(self.root, padding="12")
-        frame.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text="Days").grid(row=0, column=0, sticky=tk.W)
+        ttk.Entry(frm, textvariable=self.days_var, width=8).grid(row=0, column=1, padx=5)
+        ttk.Label(frm, text="Seed").grid(row=0, column=2, sticky=tk.W)
+        ttk.Entry(frm, textvariable=self.seed_var, width=8).grid(row=0, column=3, padx=5)
+        ttk.Label(frm, text="Poisson λ").grid(row=0, column=4, sticky=tk.W)
+        ttk.Entry(frm, textvariable=self.demand_var, width=8).grid(row=0, column=5, padx=5)
+        ttk.Button(frm, text="Run", command=self._run).grid(row=0, column=6, padx=8)
 
-        controls = ttk.LabelFrame(frame, text="Forecast Sharing Parameters", padding="10")
-        controls.pack(fill=tk.X)
-
-        self.days_var = tk.IntVar(value=self.config.num_periods)
-        self.horizon_var = tk.IntVar(value=self.config.forecast_sharing.forecast_horizon)
-        self.update_freq_var = tk.IntVar(value=self.config.forecast_sharing.forecast_update_frequency)
-        self.error_std_var = tk.DoubleVar(value=self.config.forecast_sharing.forecast_error_std)
-        self.weight_var = tk.DoubleVar(value=self.config.forecast_sharing.t1_forecast_weight)
-        self.accuracy_var = tk.StringVar(value=self.config.forecast_sharing.forecast_accuracy_model)
-
-        row = 0
-        ttk.Label(controls, text="Simulation Days").grid(row=row, column=0, sticky=tk.W)
-        ttk.Entry(controls, textvariable=self.days_var, width=8).grid(row=row, column=1, padx=(4, 16))
-        ttk.Label(controls, text="Forecast Horizon").grid(row=row, column=2, sticky=tk.W)
-        ttk.Entry(controls, textvariable=self.horizon_var, width=8).grid(row=row, column=3, padx=(4, 16))
-        ttk.Label(controls, text="Update Frequency").grid(row=row, column=4, sticky=tk.W)
-        ttk.Entry(controls, textvariable=self.update_freq_var, width=8).grid(row=row, column=5, padx=(4, 16))
-
-        row += 1
-        ttk.Label(controls, text="Accuracy Model").grid(row=row, column=0, sticky=tk.W, pady=(8, 0))
-        ttk.Combobox(
-            controls,
-            textvariable=self.accuracy_var,
-            values=["perfect", "noise"],
-            width=10,
-            state="readonly",
-        ).grid(row=row, column=1, pady=(8, 0), padx=(4, 16))
-        ttk.Label(controls, text="Forecast Error Std").grid(row=row, column=2, sticky=tk.W, pady=(8, 0))
-        ttk.Entry(controls, textvariable=self.error_std_var, width=8).grid(
-            row=row,
-            column=3,
-            pady=(8, 0),
-            padx=(4, 16),
-        )
-        ttk.Label(controls, text="T1 Forecast Weight").grid(row=row, column=4, sticky=tk.W, pady=(8, 0))
-        ttk.Entry(controls, textvariable=self.weight_var, width=8).grid(
-            row=row,
-            column=5,
-            pady=(8, 0),
-            padx=(4, 16),
-        )
-
-        ttk.Button(controls, text="Run Comparison", command=self._run).grid(
-            row=2,
-            column=0,
-            columnspan=2,
-            pady=(12, 0),
-            sticky=tk.W,
-        )
-
-        self.results = ttk.Treeview(frame, columns=("metric", "baseline", "forecast"), show="headings")
-        self.results.heading("metric", text="Metric")
-        self.results.heading("baseline", text="Baseline")
-        self.results.heading("forecast", text="Forecast Sharing")
-        self.results.column("metric", width=220)
-        self.results.column("baseline", width=160)
-        self.results.column("forecast", width=180)
-        self.results.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
+        self.tree = ttk.Treeview(frm, columns=("metric", "baseline", "forecast"), show="headings")
+        for key, title, width in [("metric", "Metric", 220), ("baseline", "Baseline", 140), ("forecast", "Forecast", 140)]:
+            self.tree.heading(key, text=title)
+            self.tree.column(key, width=width)
+        self.tree.grid(row=1, column=0, columnspan=7, sticky="nsew", pady=10)
+        frm.rowconfigure(1, weight=1)
 
     def _run(self) -> None:
         try:
             config = SimulationConfig(
-                num_periods=self.days_var.get(),
-                forecast_sharing=ForecastSharingConfig(
-                    forecast_horizon=self.horizon_var.get(),
-                    forecast_update_frequency=self.update_freq_var.get(),
-                    forecast_accuracy_model=self.accuracy_var.get(),
-                    forecast_error_std=self.error_std_var.get(),
-                    t1_forecast_weight=self.weight_var.get(),
-                ),
+                simulation_horizon=self.days_var.get(),
+                random_seed=self.seed_var.get(),
+                demand_distribution_type="poisson",
+                demand_params={"lambda": self.demand_var.get()},
             )
             comparison = compare_scenarios(config)
             self._render(comparison)
         except Exception as exc:
-            messagebox.showerror("Simulation Error", str(exc))
+            messagebox.showerror("Error", str(exc))
 
-    def _render(self, comparison) -> None:
-        for row in self.results.get_children():
-            self.results.delete(row)
-
-        metric_rows = [
-            ("Fill Rate", comparison.baseline.fill_rate, comparison.forecast_sharing.fill_rate),
-            (
-                "Mean Lead Time",
-                comparison.baseline.mean_lead_time,
-                comparison.forecast_sharing.mean_lead_time,
-            ),
-            (
-                "Bullwhip Effect",
-                comparison.baseline.bullwhip_effect,
-                comparison.forecast_sharing.bullwhip_effect,
-            ),
-            (
-                "Average Inventory",
-                comparison.baseline.average_inventory_level,
-                comparison.forecast_sharing.average_inventory_level,
-            ),
+    def _render(self, cmp) -> None:
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+        rows = [
+            ("Mean LT", cmp.baseline.mean_lead_time, cmp.forecast_sharing.mean_lead_time),
+            ("P95 LT", cmp.baseline.worst_case_lead_time_p95, cmp.forecast_sharing.worst_case_lead_time_p95),
+            ("Mean Backlog T1", cmp.baseline.mean_backlog_t1, cmp.forecast_sharing.mean_backlog_t1),
+            ("Bullwhip", cmp.baseline.bullwhip_ratio, cmp.forecast_sharing.bullwhip_ratio),
         ]
-
-        for metric, baseline_value, forecast_value in metric_rows:
-            self.results.insert(
-                "",
-                tk.END,
-                values=(metric, f"{baseline_value:.3f}", f"{forecast_value:.3f}"),
-            )
-
-
-def main() -> None:
-    root = tk.Tk()
-    ForecastSharingGUI(root)
-    root.mainloop()
+        for metric, b, f in rows:
+            self.tree.insert("", tk.END, values=(metric, f"{b:.2f}", f"{f:.2f}"))
 
 
 if __name__ == "__main__":
-    main()
+    root = tk.Tk()
+    ForecastSharingGUI(root)
+    root.mainloop()
