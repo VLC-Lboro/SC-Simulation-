@@ -4,13 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from supply_chain_simulation import (
-    ForecastModule,
-    ForecastSharingConfig,
-    SimulationConfig,
-    SimulationResults,
-    run_forecast_sharing,
-)
+from supply_chain_simulation import SimulationConfig, SimulationResults, run_forecast_sharing
 
 
 @dataclass(frozen=True)
@@ -28,8 +22,6 @@ def simulate_forecast_sharing(
 
 
 __all__ = [
-    "ForecastModule",
-    "ForecastSharingConfig",
     "ForecastSharingParams",
     "ForecastSharingResults",
     "simulate_forecast_sharing",

@@ -1,70 +1,97 @@
-"""Supply chain simulation scenarios and comparison utilities."""
+"""3-stage supply-chain discrete-event simulation with 5 SCV scenarios."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import random
-from statistics import pstdev
-from typing import List, Literal
+from statistics import mean, pstdev
+from typing import Dict, List, Literal, Optional
 
-
-ForecastAccuracyModel = Literal["perfect", "noise"]
-
-
-@dataclass(frozen=True)
-class ForecastSharingConfig:
-    """Parameters for forecast generation and usage by T1."""
-
-    forecast_horizon: int = 7
-    forecast_update_frequency: int = 2
-    forecast_accuracy_model: ForecastAccuracyModel = "perfect"
-    forecast_error_std: float = 8.0
-    t1_forecast_weight: float = 0.4
+DemandType = Literal["poisson", "normal", "deterministic"]
 
 
 @dataclass(frozen=True)
 class SimulationConfig:
-    """Configuration parameters for baseline and forecast-sharing simulations."""
+    simulation_horizon: int = 180
+    random_seed: int = 7
+    demand_distribution_type: DemandType = "poisson"
+    demand_params: Dict[str, float] = field(default_factory=lambda: {"lambda": 100.0})
+    transport_delay_t1_to_oem: int = 1
+    transport_delay_t23_to_t1: int = 2
+    t1_daily_capacity: int = 140
+    t23_daily_capacity: int = 130
+    initial_oem_inventory: int = 600
+    initial_t1_inventory: int = 600
+    oem_order_up_to_S: float = 700
+    oem_forecast_horizon: int = 7
+    t1_order_up_to_S: float = 720
+    t1_reorder_point_R: float = 0.0
+    beta_f: float = 0.10
+    alpha_inv: float = 0.30
+    oem_inventory_target: Optional[float] = None
+    replications_per_scenario: int = 1
 
-    num_periods: int = 120
-    seed: int = 7
-    avg_daily_demand: int = 100
-    oem_order_cycle_days: int = 2
-    t1_initial_inventory: int = 500
-    oem_initial_inventory: int = 500
-    t1_rop_days: float = 1.8
-    t1_order_up_to_days: float = 5.4
-    t1_review_period_days: int = 1
-    t2_daily_mean_capacity: int = 105
-    t2_daily_capacity_sd: int = 11
-    t2_downtime_probability: float = 0.05
-    t2_to_t1_lead_time_base: float = 2.0
-    t2_to_t1_lead_time_exp_mean: float = 0.5
-    t1_to_oem_lead_time_base: float = 1.0
-    t1_to_oem_lead_time_uniform_max: float = 0.5
-    otif_target_days: float = 2.0
-    forecast_sharing: ForecastSharingConfig = ForecastSharingConfig()
+    def validate(self) -> None:
+        if self.simulation_horizon < 1:
+            raise ValueError("simulation_horizon must be >= 1")
+        for value, name in [
+            (self.t1_daily_capacity, "t1_daily_capacity"),
+            (self.t23_daily_capacity, "t23_daily_capacity"),
+            (self.initial_oem_inventory, "initial_oem_inventory"),
+            (self.initial_t1_inventory, "initial_t1_inventory"),
+            (self.transport_delay_t1_to_oem, "transport_delay_t1_to_oem"),
+            (self.transport_delay_t23_to_t1, "transport_delay_t23_to_t1"),
+            (self.replications_per_scenario, "replications_per_scenario"),
+        ]:
+            if value < 0:
+                raise ValueError(f"{name} must be >= 0")
+        if self.replications_per_scenario < 1:
+            raise ValueError("replications_per_scenario must be >= 1")
+        if self.demand_distribution_type == "poisson":
+            if self.demand_params.get("lambda", 0) <= 0:
+                raise ValueError("poisson lambda must be > 0")
+        elif self.demand_distribution_type == "normal":
+            if self.demand_params.get("std_dev", -1) < 0:
+                raise ValueError("normal std_dev must be >= 0")
+        elif self.demand_distribution_type == "deterministic":
+            if self.demand_params.get("value", -1) < 0:
+                raise ValueError("deterministic value must be >= 0")
+        else:
+            raise ValueError("Unsupported demand_distribution_type")
+
+
+@dataclass
+class OrderLogEntry:
+    order_id: int
+    day_placed: int
+    day_shipped: Optional[int]
+    day_received: Optional[int]
+    qty: int
 
 
 @dataclass
 class SimulationResults:
-    """Results from a simulation run."""
-
+    scenario_id: int
     scenario_name: str
     mean_lead_time: float
     lead_time_std: float
-    worst_case_lead_time: float
+    worst_case_lead_time_p95: float
+    mean_backlog_t1: float
+    max_backlog_t1: int
+    bullwhip_ratio: float
     mean_wip: float
-    mean_backlog: float
-    otif_percentage: float
-    fill_rate: float
-    bullwhip_effect: float
-    average_inventory_level: float
-    lead_times: List[float]
-    wip_levels: List[float]
-    backlog_levels: List[float]
-    inventory_levels: List[float]
+    daily_oem_demand: List[int]
+    oem_to_t1_orders: List[int]
+    t1_to_t23_orders: List[int]
+    t1_backlog_units: List[int]
+    t1_on_hand: List[int]
+    t1_shipments_to_oem: List[int]
+    t23_backlog_units: List[int]
+    t23_production: List[int]
+    oem_on_hand: List[int]
+    lead_times: List[int]
+    order_log: List[OrderLogEntry]
 
 
 @dataclass
@@ -73,330 +100,311 @@ class ScenarioComparison:
     forecast_sharing: SimulationResults
 
 
-@dataclass
-class ScenarioComparison:
-    baseline: SimulationResults
-    forecast_sharing: SimulationResults
+def _round_nonnegative(value: float) -> int:
+    return max(0, int(round(value)))
+
+
+def _pop_variance(values: List[int]) -> float:
+    if not values:
+        return 0.0
+    m = sum(values) / len(values)
+    return sum((v - m) ** 2 for v in values) / len(values)
+
+
+def _percentile_inclusive(values: List[int], percentile: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+    pos = (len(sorted_values) - 1) * percentile
+    low = int(math.floor(pos))
+    high = int(math.ceil(pos))
+    if low == high:
+        return float(sorted_values[low])
+    frac = pos - low
+    return sorted_values[low] + frac * (sorted_values[high] - sorted_values[low])
 
 
 def _poisson(rng: random.Random, lam: float) -> int:
-    if lam <= 0:
-        return 0
-    limit = math.exp(-lam)
+    threshold = math.exp(-lam)
     k = 0
     p = 1.0
-    while p > limit:
+    while p > threshold:
         k += 1
         p *= rng.random()
     return k - 1
 
 
-class ForecastModule:
-    """Generates OEM demand forecasts with optional noise."""
-
-    def __init__(
-        self,
-        config: ForecastSharingConfig,
-        avg_daily_demand: int,
-        rng: random.Random,
-    ) -> None:
-        self.config = config
-        self.avg_daily_demand = avg_daily_demand
-        self.rng = rng
-        self.current_forecast: List[float] = [float(avg_daily_demand)] * config.forecast_horizon
-
-    def maybe_update(self, day: int) -> List[float]:
-        if day % self.config.forecast_update_frequency == 0:
-            self.current_forecast = self._generate_forecast()
-        return self.current_forecast
-
-    def _generate_forecast(self) -> List[float]:
-        forecast: List[float] = []
-        for _ in range(self.config.forecast_horizon):
-            base_value = float(self.avg_daily_demand)
-            if self.config.forecast_accuracy_model == "perfect":
-                forecast.append(base_value)
-                continue
-            noisy = base_value + self.rng.gauss(0.0, self.config.forecast_error_std)
-            forecast.append(max(0.0, noisy))
-        return forecast
+def _scenario_name(scenario_id: int) -> str:
+    return {
+        1: "baseline",
+        2: "forecast_sharing",
+        3: "inventory_visibility",
+        4: "capacity_visibility",
+        5: "full_visibility",
+    }[scenario_id]
 
 
 class SupplyChainSimulation:
-    """Three-tier supply chain simulation with optional forecast sharing."""
-
-    def __init__(self, config: SimulationConfig, scenario_name: str = "baseline"):
+    def __init__(self, config: SimulationConfig, scenario_id: int = 1, seed_offset: int = 0):
         self.config = config
-        self.scenario_name = scenario_name
-        self.use_forecast = scenario_name == "forecast_sharing"
-        self.reset()
+        self.config.validate()
+        self.scenario_id = scenario_id
+        self.rng = random.Random(config.random_seed + seed_offset)
+        self._next_order_id = 1
 
-    def reset(self) -> None:
-        self.current_period = 0
-        self.rng = random.Random(self.config.seed)
-        self.forecast_rng = random.Random(self.config.seed + 2024)
-        self.demand_rng = random.Random(self.config.seed + 1001)
+    def _demand_sample(self) -> int:
+        dist = self.config.demand_distribution_type
+        p = self.config.demand_params
+        if dist == "poisson":
+            return _poisson(self.rng, p["lambda"])
+        if dist == "normal":
+            return max(0, int(round(self.rng.gauss(p["mean"], p["std_dev"]))))
+        return max(0, int(round(p["value"])))
 
-        self.t1_inventory = self.config.t1_initial_inventory
-        self.oem_inventory = self.config.oem_initial_inventory
+    def _expected_demand(self) -> float:
+        if self.config.demand_distribution_type == "poisson":
+            return self.config.demand_params["lambda"]
+        if self.config.demand_distribution_type == "normal":
+            return self.config.demand_params["mean"]
+        return self.config.demand_params["value"]
 
-        self.t1_shipments: List[dict] = []
-        self.t2_shipments: List[dict] = []
-        self.oem_orders: List[dict] = []
-        self.t2_backlog = 0
-
-        self.lead_times: List[float] = []
-        self.on_time_shipments = 0
-        self.total_shipments = 0
-
-        self.wip_levels: List[float] = []
-        self.backlog_levels: List[float] = []
-        self.inventory_levels: List[float] = []
-
-        self.total_customer_demand = 0
-        self.total_customer_fulfilled = 0
-        self.oem_order_history: List[int] = []
-        self.t1_order_history: List[int] = []
-
-        self.t1_rop = int(self.config.t1_rop_days * self.config.avg_daily_demand)
-        self.t1_order_up_to = int(self.config.t1_order_up_to_days * self.config.avg_daily_demand)
-
-        self.forecast_module = ForecastModule(
-            self.config.forecast_sharing,
-            self.config.avg_daily_demand,
-            self.rng,
-        )
-        self.active_forecast: List[float] = []
+    def _forecast_sum(self, day: int) -> float:
+        horizon_remaining = max(0, self.config.simulation_horizon - (day + 1))
+        horizon = min(self.config.oem_forecast_horizon, horizon_remaining)
+        return self._expected_demand() * horizon
 
     def run_simulation(self) -> SimulationResults:
-        for day in range(self.config.num_periods):
-            self.current_period = day
-            self._process_arrivals()
-            self._process_oem_demand()
-            self._update_forecast()
-            self._place_oem_order()
-            self._fulfill_oem_orders()
-            self._place_t1_order()
-            self._process_t2_production()
-            self._track_metrics()
+        c = self.config
+        oem_on_hand = c.initial_oem_inventory
+        t1_on_hand = c.initial_t1_inventory
 
-        return self._calculate_results()
+        oem_order_pipeline: List[Dict[str, Optional[int]]] = []
+        t1_backlog_queue: List[Dict[str, Optional[int]]] = []
+        t1_inbound_shipments: List[Dict[str, int]] = []
+        t1_outbound_shipments: List[Dict[str, int]] = []
+        t23_order_backlog_queue: List[Dict[str, int]] = []
 
-    def _process_arrivals(self) -> None:
-        arrived_to_oem = [s for s in self.t1_shipments if s["arrival_day"] <= self.current_period]
-        self.t1_shipments = [s for s in self.t1_shipments if s["arrival_day"] > self.current_period]
-        for shipment in arrived_to_oem:
-            self.oem_inventory += shipment["qty"]
+        daily_oem_demand: List[int] = []
+        oem_to_t1_orders: List[int] = []
+        t1_to_t23_orders: List[int] = []
+        t1_backlog_units: List[int] = []
+        t1_on_hand_ts: List[int] = []
+        t1_shipments_to_oem: List[int] = []
+        t23_backlog_units: List[int] = []
+        t23_production: List[int] = []
+        oem_on_hand_ts: List[int] = []
+        lead_times: List[int] = []
 
-        arrived_to_t1 = [s for s in self.t2_shipments if s["arrival_day"] <= self.current_period]
-        self.t2_shipments = [s for s in self.t2_shipments if s["arrival_day"] > self.current_period]
-        for shipment in arrived_to_t1:
-            self.t1_inventory += shipment["qty"]
+        for day in range(c.simulation_horizon):
+            # 1) T1 receives inbound shipments from T23
+            arrivals_t1 = [s for s in t1_inbound_shipments if s["arrival_day"] == day]
+            t1_on_hand += sum(s["qty"] for s in arrivals_t1)
+            t1_inbound_shipments = [s for s in t1_inbound_shipments if s["arrival_day"] != day]
 
-    def _process_oem_demand(self) -> None:
-        demand = _poisson(self.rng, self.config.avg_daily_demand)
-        self.total_customer_demand += demand
+            # 2) OEM receives inbound shipments from T1
+            arrivals_oem = [s for s in t1_outbound_shipments if s["arrival_day"] == day]
+            for shipment in arrivals_oem:
+                oem_on_hand += shipment["qty"]
+                matching = next((o for o in oem_order_pipeline if o["order_id"] == shipment["order_id"] and o["day_received"] is None), None)
+                if matching is not None:
+                    matching["day_received"] = day
+                    lead_times.append(day - int(matching["day_placed"]))
+            t1_outbound_shipments = [s for s in t1_outbound_shipments if s["arrival_day"] != day]
 
-        fulfilled = min(demand, self.oem_inventory)
-        self.oem_inventory -= fulfilled
-        self.total_customer_fulfilled += fulfilled
+            # 3) OEM demand realization
+            demand = self._demand_sample()
+            daily_oem_demand.append(demand)
+            oem_on_hand = max(0, oem_on_hand - demand)
 
-    def _update_forecast(self) -> None:
-        if self.use_forecast:
-            self.active_forecast = self.forecast_module.maybe_update(self.current_period)
-
-        fulfilled = min(demand, self.oem_inventory)
-        self.oem_inventory -= fulfilled
-        self.total_customer_fulfilled += fulfilled
-
-    def _update_forecast(self) -> None:
-        if not self.use_forecast:
-            return
-
-        order_size = _poisson(
-            self.rng,
-            self.config.avg_daily_demand * self.config.oem_order_cycle_days,
-        )
-        self.oem_order_history.append(order_size)
-        if order_size > 0:
-            self.oem_orders.append({"order_day": self.current_period, "remaining": order_size})
-
-    def _fulfill_oem_orders(self) -> None:
-        for order in self.oem_orders:
-            if order["remaining"] == 0 or self.t1_inventory == 0:
-                continue
-
-            qty = min(order["remaining"], self.t1_inventory)
-            self.t1_inventory -= qty
-            order["remaining"] -= qty
-
-            lead_time = self.config.t1_to_oem_lead_time_base + self.rng.uniform(
-                0,
-                self.config.t1_to_oem_lead_time_uniform_max,
-            )
-            arrival_day = self.current_period + math.ceil(lead_time)
-            self.t1_shipments.append(
-                {
-                    "arrival_day": arrival_day,
-                    "qty": qty,
-                    "order_day": order["order_day"],
+            # 4) OEM ordering decision
+            pipeline_qty = sum(int(o["qty"]) for o in oem_order_pipeline if o["day_received"] is None)
+            ip_oem = oem_on_hand + pipeline_qty
+            oem_order_qty = _round_nonnegative(max(0.0, c.oem_order_up_to_S - ip_oem))
+            oem_to_t1_orders.append(oem_order_qty)
+            if oem_order_qty > 0:
+                order = {
+                    "order_id": self._next_order_id,
+                    "qty": oem_order_qty,
+                    "day_placed": day,
+                    "day_shipped": None,
+                    "day_received": None,
                 }
-            )
+                self._next_order_id += 1
+                oem_order_pipeline.append(order)
+                t1_backlog_queue.append(
+                    {
+                        "order_id": order["order_id"],
+                        "qty": order["qty"],
+                        "day_received_from_oem": day,
+                        "day_shipped": None,
+                    }
+                )
 
-            lt = arrival_day - order["order_day"]
-            self.lead_times.append(lt)
-            self.total_shipments += 1
-            if lt <= self.config.otif_target_days:
-                self.on_time_shipments += 1
-
-        self.oem_orders = [order for order in self.oem_orders if order["remaining"] > 0]
-
-    def _place_t1_order(self) -> None:
-        if self.current_period % self.config.t1_review_period_days != 0:
-            self.t1_order_history.append(0)
-            return
-
-        t1_backlog_qty = sum(order["remaining"] for order in self.oem_orders)
-        t2_pipeline = sum(s["qty"] for s in self.t2_shipments)
-        inventory_position = self.t1_inventory + t2_pipeline - t1_backlog_qty
-
-        target_order_up_to = self.t1_order_up_to
-        if self.use_forecast and self.active_forecast:
-            cycle_days = max(1, self.config.oem_order_cycle_days)
-            forecast_window = self.active_forecast[:cycle_days]
-            expected_cycle_demand = sum(forecast_window)
-            blended_cycle_demand = (
-                (1 - self.config.forecast_sharing.t1_forecast_weight)
-                * (self.config.avg_daily_demand * cycle_days)
-                + self.config.forecast_sharing.t1_forecast_weight * expected_cycle_demand
-            )
-            target_order_up_to += int(round(max(0.0, blended_cycle_demand)))
-
-        order_qty = 0
-        if inventory_position <= self.t1_rop:
-            order_qty = max(0, target_order_up_to - inventory_position)
-            self.t2_backlog += order_qty
-
-        self.t1_order_history.append(order_qty)
-
-    def _process_t2_production(self) -> None:
-        if self.rng.random() < self.config.t2_downtime_probability:
-            daily_capacity = 0
-        else:
-            daily_capacity = max(
-                0,
-                int(
-                    round(
-                        self.rng.gauss(
-                            self.config.t2_daily_mean_capacity,
-                            self.config.t2_daily_capacity_sd,
-                        )
+            # 5) T1 shipping to OEM
+            available_shipping_capacity = c.t1_daily_capacity
+            shipped_today = 0
+            while t1_backlog_queue:
+                oldest = t1_backlog_queue[0]
+                qty = int(oldest["qty"])
+                if t1_on_hand >= qty and available_shipping_capacity >= qty:
+                    t1_on_hand -= qty
+                    available_shipping_capacity -= qty
+                    shipped_today += qty
+                    oldest["day_shipped"] = day
+                    matching = next(o for o in oem_order_pipeline if o["order_id"] == oldest["order_id"])
+                    matching["day_shipped"] = day
+                    t1_outbound_shipments.append(
+                        {
+                            "order_id": int(oldest["order_id"]),
+                            "qty": qty,
+                            "dispatch_day": day,
+                            "arrival_day": day + c.transport_delay_t1_to_oem,
+                        }
                     )
-                ),
+                    t1_backlog_queue.pop(0)
+                else:
+                    break
+
+            backlog_qty_after_shipping = sum(int(o["qty"]) for o in t1_backlog_queue)
+
+            # 6) T1 upstream ordering
+            inbound_pipeline_qty = sum(s["qty"] for s in t1_inbound_shipments if s["arrival_day"] > day)
+            ip_t1 = t1_on_hand + inbound_pipeline_qty - backlog_qty_after_shipping
+            s_t1_effective = c.t1_order_up_to_S
+
+            if self.scenario_id in (2, 5):
+                s_t1_effective += c.beta_f * self._forecast_sum(day)
+            if self.scenario_id in (3, 5):
+                target = c.oem_inventory_target if c.oem_inventory_target is not None else c.oem_order_up_to_S
+                s_t1_effective = max(0.0, s_t1_effective - c.alpha_inv * (oem_on_hand - target))
+
+            t1_order_raw = max(0.0, s_t1_effective - ip_t1)
+            if self.scenario_id in (4, 5):
+                t1_order_raw = min(t1_order_raw, float(c.t23_daily_capacity))
+
+            t1_order_qty = _round_nonnegative(t1_order_raw)
+            t1_to_t23_orders.append(t1_order_qty)
+            if t1_order_qty > 0:
+                t23_order_backlog_queue.append({"qty": t1_order_qty, "day_received_from_t1": day})
+
+            # 7) T23 production (FIFO, partial allowed)
+            available_capacity = c.t23_daily_capacity
+            produced_today = 0
+            while available_capacity > 0 and t23_order_backlog_queue:
+                oldest = t23_order_backlog_queue[0]
+                produce = min(available_capacity, oldest["qty"])
+                oldest["qty"] -= produce
+                available_capacity -= produce
+                produced_today += produce
+                if oldest["qty"] == 0:
+                    t23_order_backlog_queue.pop(0)
+
+            # 8) T23 dispatch to T1
+            if produced_today > 0:
+                t1_inbound_shipments.append(
+                    {
+                        "qty": produced_today,
+                        "dispatch_day": day,
+                        "arrival_day": day + c.transport_delay_t23_to_t1,
+                    }
+                )
+
+            # 9) End-of-day metrics
+            t1_shipments_to_oem.append(shipped_today)
+            t1_backlog_units.append(backlog_qty_after_shipping)
+            t1_on_hand_ts.append(t1_on_hand)
+            t23_backlog_units.append(sum(o["qty"] for o in t23_order_backlog_queue))
+            t23_production.append(produced_today)
+            oem_on_hand_ts.append(oem_on_hand)
+
+        mean_backlog = mean(t1_backlog_units) if t1_backlog_units else 0.0
+        demand_variance = _pop_variance(daily_oem_demand)
+        order_variance = _pop_variance(t1_to_t23_orders)
+        bullwhip = order_variance / demand_variance if demand_variance > 0 else float("nan")
+        mean_wip = mean([t1_on_hand_ts[i] + t23_backlog_units[i] for i in range(len(t1_on_hand_ts))]) if t1_on_hand_ts else 0.0
+
+        order_log = [
+            OrderLogEntry(
+                order_id=int(o["order_id"]),
+                day_placed=int(o["day_placed"]),
+                day_shipped=None if o["day_shipped"] is None else int(o["day_shipped"]),
+                day_received=None if o["day_received"] is None else int(o["day_received"]),
+                qty=int(o["qty"]),
             )
-
-        produced = min(self.t2_backlog, daily_capacity)
-        if produced > 0:
-            self.t2_backlog -= produced
-            t2_lead_time = self.config.t2_to_t1_lead_time_base + self.rng.expovariate(
-                1 / self.config.t2_to_t1_lead_time_exp_mean
-            )
-            arrival_day = self.current_period + math.ceil(t2_lead_time)
-            self.t2_shipments.append({"arrival_day": arrival_day, "qty": produced})
-
-    def _track_metrics(self) -> None:
-        t1_backlog_qty = sum(order["remaining"] for order in self.oem_orders)
-        t2_pipeline = sum(s["qty"] for s in self.t2_shipments)
-        self.wip_levels.append(self.t1_inventory + t2_pipeline)
-        self.backlog_levels.append(t1_backlog_qty)
-        self.inventory_levels.append(self.t1_inventory)
-
-    def _calculate_results(self) -> SimulationResults:
-        if self.lead_times:
-            mean_lt = sum(self.lead_times) / len(self.lead_times)
-            variance = sum((lt - mean_lt) ** 2 for lt in self.lead_times) / len(self.lead_times)
-            lead_time_std = math.sqrt(variance)
-            worst_case = max(self.lead_times)
-        else:
-            mean_lt = 0.0
-            lead_time_std = 0.0
-            worst_case = 0.0
-
-        mean_wip = sum(self.wip_levels) / len(self.wip_levels) if self.wip_levels else 0.0
-        mean_backlog = (
-            sum(self.backlog_levels) / len(self.backlog_levels) if self.backlog_levels else 0.0
-        )
-        otif = (
-            self.on_time_shipments / self.total_shipments * 100 if self.total_shipments else 0.0
-        )
-
-        fill_rate = (
-            self.total_customer_fulfilled / self.total_customer_demand
-            if self.total_customer_demand
-            else 0.0
-        )
-
-        oem_order_std = pstdev(self.oem_order_history) if len(self.oem_order_history) > 1 else 0.0
-        t1_order_std = pstdev(self.t1_order_history) if len(self.t1_order_history) > 1 else 0.0
-        bullwhip = t1_order_std / oem_order_std if oem_order_std > 0 else 0.0
-
-        average_inventory = (
-            sum(self.inventory_levels) / len(self.inventory_levels) if self.inventory_levels else 0.0
-        )
-
-        fill_rate = (
-            self.total_customer_fulfilled / self.total_customer_demand
-            if self.total_customer_demand
-            else 0.0
-        )
-
-        oem_order_std = pstdev(self.oem_order_history) if len(self.oem_order_history) > 1 else 0.0
-        t1_order_std = pstdev(self.t1_order_history) if len(self.t1_order_history) > 1 else 0.0
-        bullwhip = (t1_order_std / oem_order_std) if oem_order_std > 0 else 0.0
-
-        average_inventory = (
-            sum(self.inventory_levels) / len(self.inventory_levels) if self.inventory_levels else 0.0
-        )
+            for o in oem_order_pipeline
+        ]
 
         return SimulationResults(
-            scenario_name=self.scenario_name,
-            mean_lead_time=mean_lt,
-            lead_time_std=lead_time_std,
-            worst_case_lead_time=worst_case,
+            scenario_id=self.scenario_id,
+            scenario_name=_scenario_name(self.scenario_id),
+            mean_lead_time=mean(lead_times) if lead_times else 0.0,
+            lead_time_std=pstdev(lead_times) if len(lead_times) > 1 else 0.0,
+            worst_case_lead_time_p95=_percentile_inclusive(lead_times, 0.95),
+            mean_backlog_t1=mean_backlog,
+            max_backlog_t1=max(t1_backlog_units) if t1_backlog_units else 0,
+            bullwhip_ratio=bullwhip,
             mean_wip=mean_wip,
-            mean_backlog=mean_backlog,
-            otif_percentage=otif,
-            fill_rate=fill_rate,
-            bullwhip_effect=bullwhip,
-            average_inventory_level=average_inventory,
-            lead_times=self.lead_times,
-            wip_levels=self.wip_levels,
-            backlog_levels=self.backlog_levels,
-            inventory_levels=self.inventory_levels,
+            daily_oem_demand=daily_oem_demand,
+            oem_to_t1_orders=oem_to_t1_orders,
+            t1_to_t23_orders=t1_to_t23_orders,
+            t1_backlog_units=t1_backlog_units,
+            t1_on_hand=t1_on_hand_ts,
+            t1_shipments_to_oem=t1_shipments_to_oem,
+            t23_backlog_units=t23_backlog_units,
+            t23_production=t23_production,
+            oem_on_hand=oem_on_hand_ts,
+            lead_times=lead_times,
+            order_log=order_log,
         )
 
 
-def run_baseline(config: SimulationConfig | None = None) -> SimulationResults:
-    """Run the baseline scenario simulation."""
-    if config is None:
-        config = SimulationConfig()
-    simulation = SupplyChainSimulation(config, scenario_name="baseline")
-    return simulation.run_simulation()
+def run_scenario(config: SimulationConfig, scenario_id: int) -> SimulationResults:
+    if scenario_id not in {1, 2, 3, 4, 5}:
+        raise ValueError("scenario_id must be in {1,2,3,4,5}")
+
+    all_results = [SupplyChainSimulation(config, scenario_id, seed_offset=i).run_simulation() for i in range(config.replications_per_scenario)]
+    if len(all_results) == 1:
+        return all_results[0]
+
+    # Aggregate scalar KPIs across replications; keep timeseries from replication 0.
+    base = all_results[0]
+    return SimulationResults(
+        scenario_id=scenario_id,
+        scenario_name=base.scenario_name,
+        mean_lead_time=mean(r.mean_lead_time for r in all_results),
+        lead_time_std=mean(r.lead_time_std for r in all_results),
+        worst_case_lead_time_p95=mean(r.worst_case_lead_time_p95 for r in all_results),
+        mean_backlog_t1=mean(r.mean_backlog_t1 for r in all_results),
+        max_backlog_t1=max(r.max_backlog_t1 for r in all_results),
+        bullwhip_ratio=mean(r.bullwhip_ratio for r in all_results),
+        mean_wip=mean(r.mean_wip for r in all_results),
+        daily_oem_demand=base.daily_oem_demand,
+        oem_to_t1_orders=base.oem_to_t1_orders,
+        t1_to_t23_orders=base.t1_to_t23_orders,
+        t1_backlog_units=base.t1_backlog_units,
+        t1_on_hand=base.t1_on_hand,
+        t1_shipments_to_oem=base.t1_shipments_to_oem,
+        t23_backlog_units=base.t23_backlog_units,
+        t23_production=base.t23_production,
+        oem_on_hand=base.oem_on_hand,
+        lead_times=base.lead_times,
+        order_log=base.order_log,
+    )
 
 
-def run_forecast_sharing(config: SimulationConfig | None = None) -> SimulationResults:
-    """Run the forecast-sharing scenario simulation."""
-    if config is None:
-        config = SimulationConfig()
-    simulation = SupplyChainSimulation(config, scenario_name="forecast_sharing")
-    return simulation.run_simulation()
+def run_baseline(config: SimulationConfig) -> SimulationResults:
+    return run_scenario(config, 1)
 
 
-def compare_scenarios(config: SimulationConfig | None = None) -> ScenarioComparison:
-    """Run baseline and forecast-sharing scenarios for side-by-side analysis."""
-    if config is None:
-        config = SimulationConfig()
+def run_forecast_sharing(config: SimulationConfig) -> SimulationResults:
+    return run_scenario(config, 2)
 
-    baseline_results = run_baseline(config)
-    forecast_results = run_forecast_sharing(config)
-    return ScenarioComparison(baseline=baseline_results, forecast_sharing=forecast_results)
+
+def compare_scenarios(config: SimulationConfig) -> ScenarioComparison:
+    return ScenarioComparison(baseline=run_scenario(config, 1), forecast_sharing=run_scenario(config, 2))
+
+
+def run_all_scenarios(config: SimulationConfig) -> Dict[int, SimulationResults]:
+    return {scenario_id: run_scenario(config, scenario_id) for scenario_id in [1, 2, 3, 4, 5]}

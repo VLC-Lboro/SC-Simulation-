@@ -1,63 +1,46 @@
 # SC-Simulation-
 
-Supply chain simulation scaffolding for a three-stage automotive model.
+3-stage automotive supply-chain discrete-event simulator with a GUI and 5 supply-chain-visibility (SCV) scenarios.
 
-## Run the baseline simulation
+## Scenarios
+
+1. Baseline
+2. Forecast sharing
+3. Inventory visibility
+4. Capacity visibility
+5. Full visibility (2 + 3 + 4)
+
+## Run GUI
 
 ```bash
-python -m sc_simulation.baseline
+python gui_application.py
 ```
 
-## Run forecast sharing scenario comparison GUI
+## Run baseline-vs-forecast mini GUI
 
 ```bash
 python gui_forecast_sharing.py
 ```
 
-## Run forecast sharing scenario comparison GUI
-
-```bash
-python gui_forecast_sharing.py
-```
-
-The forecast-sharing GUI presents baseline KPIs and forecast-sharing KPIs side-by-side (mean lead time, lead-time std, worst lead time, mean WIP, mean backlog, OTIF, fill rate, bullwhip, average inventory) and includes plots for lead-time distributions, WIP/backlog traces, and OTIF/fill/bullwhip comparisons.
-
-## Programmatic usage
+## Programmatic run
 
 ```python
-from supply_chain_simulation import (
-    SimulationConfig,
-    ForecastSharingConfig,
-    run_baseline,
-    run_forecast_sharing,
-    compare_scenarios,
-)
+from supply_chain_simulation import SimulationConfig, run_all_scenarios
 
 config = SimulationConfig(
-    num_periods=120,
-    forecast_sharing=ForecastSharingConfig(
-        forecast_horizon=7,
-        forecast_update_frequency=2,
-        forecast_accuracy_model="noise",
-        forecast_error_std=8.0,
-        t1_forecast_weight=0.4,
-    ),
+    simulation_horizon=180,
+    random_seed=7,
+    demand_distribution_type="poisson",
+    demand_params={"lambda": 100.0},
 )
 
-baseline_results = run_baseline(config)
-forecast_results = run_forecast_sharing(config)
-comparison = compare_scenarios(config)
-print(comparison.baseline.fill_rate, comparison.forecast_sharing.fill_rate)
+results = run_all_scenarios(config)
+print(results[1].mean_lead_time, results[5].mean_lead_time)
 ```
-
-## Scenario config metadata
-
-Default metadata for baseline and forecast-sharing parameters is stored in:
-
-- `scenario_config.json`
 
 ## Tests
 
 ```bash
-python -m unittest
+python -m unittest discover -s tests
+pytest -q
 ```
